@@ -13,11 +13,11 @@ Refatoração conceitual do portal acadêmico do Inatel com foco em modernizaç�
 | ORM            | Prisma 6                |
 | Banco de dados | PostgreSQL              |
 | Testes         | Vitest 3                |
-| CI/CD          | GitLab CI               |
+| CI/CD          | Semaphore CI            |
 
 ## Pré-requisitos
 
-- Node.js >= 20 (recomendado; mínimo 18)
+- Node.js >= 20.19.0 (a pipeline usa 20.19.5)
 - npm >= 10
 - Docker ou Podman — para o banco de dados local
 
@@ -222,44 +222,58 @@ Commitar schema.prisma + a pasta da migration juntos
 
 ## CI/CD
 
-O projeto usa **GitLab CI** (GitHub Actions não é utilizado, conforme especificação da disciplina). O pipeline está definido em `.gitlab-ci.yml` e é acionado automaticamente a cada push.
+O projeto usa **Semaphore CI**. A pipeline está definida em
+`.semaphore/semaphore.yml` e é executada automaticamente a cada push.
 
-### Stages
-
-| Stage     | Jobs                                | Descrição                                              |
-| --------- | ----------------------------------- | ------------------------------------------------------ |
-| `install` | `install_dependencies`              | Instala dependências com cache                         |
-| `lint`    | `typecheck`, `lint_code`            | Valida tipagem TypeScript e estilo de código           |
-| `test`    | `unit_tests`, `unit_tests_coverage` | Executa testes unitários e gera relatório de cobertura |
-| `build`   | `build_app`                         | Build de produção Next.js                              |
-| `report`  | `pipeline_summary`                  | Publica sumário da pipeline como artefato              |
-
-Os testes não requerem banco de dados — todos os mocks isolam a camada de infraestrutura.
-
-### Pipeline de segurança (DevSecOps)
-
-> As tabelas de _stages_ acima descrevem uma configuração de GitLab CI legada. O pipeline efetivamente em uso é o **CircleCI**, definido em `.circleci/config.yml`.
-
-Como parte da adoção de práticas de DevSecOps, o pipeline inclui um job dedicado de segurança (`security_scan`) que roda **em paralelo** aos testes unitários. O build de produção só é executado se ambos passarem:
+Os blocos de qualidade, testes e segurança rodam em paralelo. O build de
+produção só é executado se todos passarem:
 
 ```
-unit_tests ────┐
-               ├──► build_app
+code_quality ──┐
+unit_tests ────┼──► production_build ──► pipeline_summary
 security_scan ─┘
 ```
 
-O `security_scan` executa duas verificações:
+| Bloco              | Verificações                                                        |
+| ------------------ | ------------------------------------------------------------------- |
+| `Code quality`     | ESLint e typecheck do TypeScript                                    |
+| `Unit tests`       | Vitest com publicação de resultados JUnit                           |
+| `Security scan`    | `npm audit` informativo e Gitleaks bloqueante                       |
+| `Production build` | Validação das variáveis obrigatórias e build de produção do Next.js |
+| `after_pipeline`   | Publicação de um sumário da execução como artefato                  |
 
-| Verificação      | Ferramenta                | Comportamento                                                                                     |
-| ---------------- | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| Vulnerabilidades em dependências | `npm audit`               | **Informativo** (não bloqueante). Gera o relatório `security-results/npm-audit.json` como artefato. |
+Os testes não requerem banco de dados: todos os mocks isolam a camada de
+infraestrutura.
+
+### Pipeline de segurança (DevSecOps)
+
+O bloco `Security scan` executa duas verificações:
+
+| Verificação                      | Ferramenta                                       | Comportamento                                                                                                                          |
+| -------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Vulnerabilidades em dependências | `npm audit`                                      | **Informativo** (não bloqueante). Gera o relatório `security-results/npm-audit.json` como artefato.                                    |
 | Vazamento de segredos            | [gitleaks](https://github.com/gitleaks/gitleaks) | **Bloqueante**. Falha o pipeline se encontrar um segredo no código ou no histórico de commits. Gera `security-results/gitleaks.sarif`. |
 
 Pontos relevantes:
 
 - O `npm audit` é informativo por enquanto porque ainda há vulnerabilidades herdadas a corrigir. Após a remediação das dependências, o gate será tornado **bloqueante** (`npm audit --audit-level=high`).
 - A configuração do gitleaks está em `.gitleaks.toml`: usa o conjunto de regras padrão da ferramenta e mantém uma _allowlist_ apenas para o `.env.example`, que contém somente _placeholders_.
-- Os relatórios de cada execução ficam disponíveis como artefatos do build no CircleCI.
+- Os relatórios de testes, segurança e o sumário da execução ficam disponíveis
+  como artefatos do workflow no Semaphore.
+
+### Variáveis de ambiente da pipeline
+
+O bloco de build importa o secret `inatel-academic-portal-ci`, que deve conter:
+
+| Variável             | Obrigatória | Descrição                                      |
+| -------------------- | ----------- | ---------------------------------------------- |
+| `DATABASE_URL`       | Sim         | URL PostgreSQL válida usada durante o build    |
+| `BETTER_AUTH_SECRET` | Sim         | Segredo aleatório do Better Auth com 32+ chars |
+| `BETTER_AUTH_URL`    | Não         | URL pública da aplicação                       |
+| `OPENAI_API_KEY`     | Não         | Chave usada pelo assistente de IA              |
+
+O valor de `NODE_ENV` não deve ser incluído no secret; a pipeline define
+`NODE_ENV=production` somente no comando de build.
 
 Para reproduzir as verificações localmente:
 
@@ -479,7 +493,7 @@ O grupo adotou uma metodologia **híbrida** inspirada em Scrum e Kanban, adaptad
 
 - **Versionamento:** GitHub (repositório no time da matéria)
 - **Revisão de código:** Pull Requests com discussão
-- **CI/CD:** GitLab CI
+- **CI/CD:** Semaphore CI
 - **Comunicação:** WhatsApp + issues do GitHub
 
 ---
@@ -511,7 +525,7 @@ feat(professor): add grade submission with validation
 fix(professor): correct API endpoint URLs in ManageClient
 refactor(professor): delegate routes to service layer
 test(professor): add unit tests for notes and exams service
-ci: add GitLab CI pipeline with install, lint, test and build stages
+ci: configure Semaphore pipeline
 chore: add coverage support and @vitest/coverage-v8 dependency
 ```
 

@@ -1,48 +1,134 @@
-# This is a simple Semaphore configuration file
-# For more information about Semaphore configuration visit:
-# https://docs.semaphoreci.com/reference/pipeline-yaml-reference/
+version: v1.0
+name: Inatel Academic Portal CI
 
-version: v1.0  # Semaphore configuration version
-name: "🎯 Simple CI Pipeline"  # Pipeline display name
-
-# Define the machine type and OS image
 agent:
   machine:
     type: r1-standard-2
     os_image: ubuntu2404
 
-# Configure when to stop the pipeline early
 fail_fast:
   stop:
-    when: branch != 'main'  # Stop all blocks if a job fails on non-main branches
+    when: branch != 'main'
+
 auto_cancel:
   running:
-    when: branch != 'main'  # Cancel running pipelines on non-main branches
+    when: branch != 'main'
   queued:
-    when: branch = 'main'   # Cancel queued pipelines on main branch
+    when: branch = 'main'
 
-# Pipeline blocks represent groups of jobs that can run in parallel
 blocks:
-  # Block for testing
-  - name: "🧪 Test"
+  - name: Code quality
     dependencies: []
     task:
+      env_vars:
+        - name: SKIP_ENV_VALIDATION
+          value: "1"
+      prologue:
+        commands:
+          - checkout
+          - sem-version node 20.19.5
+          - cache restore npm-cache-v1-$(checksum package-lock.json),npm-cache-v1-
+          - npm ci --include=dev --cache ~/.npm --prefer-offline
       jobs:
-        - name: "🟢 Run Tests"
+        - name: Lint and typecheck
           commands:
-            - echo "Checking out code..."
-            - echo "Installing dependencies..."
-            - echo "Running test suite..."
-            - echo "Tests completed successfully!"
+            - npm run lint
+            - npm run typecheck
+      epilogue:
+        on_pass:
+          commands:
+            - cache store npm-cache-v1-$(checksum package-lock.json) ~/.npm
 
-  # Block for deployment
-  - name: "🚀 Deploy"
-    dependencies: ["🧪 Test"]  # Only deploy if tests pass
+  - name: Unit tests
+    dependencies: []
     task:
+      prologue:
+        commands:
+          - checkout
+          - sem-version node 20.19.5
+          - cache restore npm-cache-v1-$(checksum package-lock.json),npm-cache-v1-
+          - npm ci --include=dev --cache ~/.npm --prefer-offline
       jobs:
-        - name: "📦 Deploy to Production"
+        - name: Run unit tests
           commands:
-            - echo "Building application..."
-            - echo "Running security checks..."
-            - echo "Deploying to production..."
-            - echo "Deployment completed successfully!"
+            - mkdir -p test-results
+            - npm run test:unit -- --reporter=verbose --reporter=junit --outputFile=test-results/junit.xml
+      epilogue:
+        always:
+          commands:
+            - test-results publish test-results || true
+            - artifact push workflow test-results || true
+        on_pass:
+          commands:
+            - cache store npm-cache-v1-$(checksum package-lock.json) ~/.npm
+
+  - name: Security scan
+    dependencies: []
+    task:
+      prologue:
+        commands:
+          - checkout
+          - if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then git fetch --unshallow; fi
+          - sem-version node 20.19.5
+          - cache restore npm-cache-v1-$(checksum package-lock.json),npm-cache-v1-
+          - npm ci --include=dev --cache ~/.npm --prefer-offline
+      jobs:
+        - name: Audit dependencies and scan secrets
+          commands:
+            - mkdir -p security-results
+            - npm audit --json > security-results/npm-audit.json || true
+            - npm audit --audit-level=high || echo "WARNING - vulnerabilities found. See security-results/npm-audit.json. INFORMATIONAL GATE."
+            - curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+            - tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            - sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+            - gitleaks version
+            - gitleaks detect --source . --config .gitleaks.toml --redact --report-format sarif --report-path security-results/gitleaks.sarif --verbose
+      epilogue:
+        always:
+          commands:
+            - artifact push workflow security-results || true
+        on_pass:
+          commands:
+            - cache store npm-cache-v1-$(checksum package-lock.json) ~/.npm
+
+  - name: Production build
+    dependencies:
+      - Code quality
+      - Unit tests
+      - Security scan
+    task:
+      secrets:
+        - name: inatel-academic-portal-ci
+      prologue:
+        commands:
+          - checkout
+          - sem-version node 20.19.5
+          - cache restore npm-cache-v1-$(checksum package-lock.json),npm-cache-v1-
+          - npm ci --include=dev --cache ~/.npm --prefer-offline
+      jobs:
+        - name: Build application
+          commands:
+            - test -n "$DATABASE_URL" || (echo "DATABASE_URL must be configured in the Semaphore secret inatel-academic-portal-ci" && exit 1)
+            - test -n "$BETTER_AUTH_SECRET" || (echo "BETTER_AUTH_SECRET must be configured in the Semaphore secret inatel-academic-portal-ci" && exit 1)
+            - NODE_ENV=production npm run build
+      epilogue:
+        on_pass:
+          commands:
+            - cache store npm-cache-v1-$(checksum package-lock.json) ~/.npm
+
+after_pipeline:
+  task:
+    jobs:
+      - name: Publish pipeline summary
+        commands:
+          - mkdir -p pipeline-results
+          - |
+            printf "Pipeline: %s\nResult: %s\nReason: %s\nBranch: %s\nCommit: %s\nWorkflow: %s\n" \
+              "$SEMAPHORE_PIPELINE_NAME" \
+              "$SEMAPHORE_PIPELINE_RESULT" \
+              "$SEMAPHORE_PIPELINE_RESULT_REASON" \
+              "$SEMAPHORE_GIT_BRANCH" \
+              "$SEMAPHORE_GIT_SHA" \
+              "$SEMAPHORE_WORKFLOW_ID" \
+              > pipeline-results/summary.txt
+          - artifact push workflow pipeline-results

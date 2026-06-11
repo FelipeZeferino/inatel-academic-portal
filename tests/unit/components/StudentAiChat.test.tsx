@@ -23,8 +23,8 @@ describe("StudentAiChat", () => {
     const user = userEvent.setup();
     const assistantReply = "Sua media geral atual e 8.2.";
     const prompt = "Como está meu desempenho geral?";
-    let resolveFetch: ((value: ReturnType<typeof createFetchResponse>) => void) | null =
-      null;
+    let resolveFetch: (value: ReturnType<typeof createFetchResponse>) => void =
+      vi.fn();
 
     (global.fetch as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
@@ -76,7 +76,7 @@ describe("StudentAiChat", () => {
       ],
     });
 
-    resolveFetch?.(createFetchResponse({ message: assistantReply }));
+    resolveFetch(createFetchResponse({ message: assistantReply }));
 
     expect(await screen.findByText(assistantReply)).toBeInTheDocument();
     await waitFor(() => {
@@ -90,8 +90,8 @@ describe("StudentAiChat", () => {
     const user = userEvent.setup();
     const prompt = "Tenho provas próximas?";
     const errorMessage = "A integracao com IA nao esta configurada.";
-    let resolveFetch: ((value: ReturnType<typeof createFetchResponse>) => void) | null =
-      null;
+    let resolveFetch: (value: ReturnType<typeof createFetchResponse>) => void =
+      vi.fn();
 
     (global.fetch as ReturnType<typeof vi.fn>).mockImplementationOnce(
       () =>
@@ -109,7 +109,7 @@ describe("StudentAiChat", () => {
       await screen.findByText(/pensando na melhor resposta com base nos seus dados/i),
     ).toBeInTheDocument();
 
-    resolveFetch?.(createFetchResponse({ error: errorMessage }, false));
+    resolveFetch(createFetchResponse({ error: errorMessage }, false));
 
     expect(await screen.findByText(errorMessage)).toBeInTheDocument();
     expect(screen.queryByText(/^Assistente$/i)).toBeInTheDocument();

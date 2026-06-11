@@ -38,6 +38,9 @@ describe("getStudentContext - Validação de Dados e Autorização", () => {
     const resultado = await getStudentContext();
 
     expect(resultado.ok).toBe(false);
+    if (resultado.ok) {
+      throw new Error("Expected student context access to be denied");
+    }
     expect(resultado.status).toBe(403);
     expect(resultado.message).toContain("Acesso permitido somente para alunos");
   });
@@ -189,6 +192,9 @@ describe("getStudentContext - Validação de Dados e Autorização", () => {
     const resultado = await getStudentContext();
 
     expect(resultado.ok).toBe(false);
+    if (resultado.ok) {
+      throw new Error("Expected student context access to be denied");
+    }
     expect(resultado.status).toBe(403);
     expect(resultado.message).toContain("Acesso permitido somente para alunos");
   });

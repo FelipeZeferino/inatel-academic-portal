@@ -12,7 +12,6 @@ import {
 
 function criarDisciplina(overrides: Partial<Disciplina> & { id: string }): Disciplina {
   return {
-    id: overrides.id,
     nome: "Disciplina Teste",
     codigo: null,
     semestre: null,
