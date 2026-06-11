@@ -1,0 +1,10 @@
+title = "gitleaks config - inatel-academic-portal"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Arquivos de exemplo/placeholder sem segredos reais"
+paths = [
+  '''\.env\.example$''',
+]

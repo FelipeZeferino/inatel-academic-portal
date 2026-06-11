@@ -1,0 +1,97 @@
+version: 2.1
+
+executors:
+  node:
+    docker:
+      - image: cimg/node:20.19.5
+    working_directory: ~/inatel-academic-portal
+
+commands:
+  install_dependencies:
+    steps:
+      - checkout
+      - restore_cache:
+          keys:
+            - npm-cache-v1-{{ checksum "package-lock.json" }}
+            - npm-cache-v1-
+      - run:
+          name: Install dependencies
+          command: npm ci --include=dev --cache ~/.npm --prefer-offline
+      - save_cache:
+          key: npm-cache-v1-{{ checksum "package-lock.json" }}
+          paths:
+            - ~/.npm
+
+jobs:
+  unit_tests:
+    executor: node
+    steps:
+      - install_dependencies
+      - run:
+          name: Run unit tests
+          command: |
+            mkdir -p test-results
+            npm run test:unit -- --reporter=verbose --reporter=junit --outputFile=test-results/junit.xml
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+          destination: test-results
+
+  security_scan:
+    executor: node
+    steps:
+      - install_dependencies
+      - run:
+          name: Dependency vulnerability audit (npm audit)
+          # Após dependências corrigidas, será modificado o gate abaixo para bloqueante!
+          command: |
+            mkdir -p security-results
+            npm audit --json > security-results/npm-audit.json || true
+            npm audit --audit-level=high || \
+              echo "AVISO: vulnerabilidades encontradas. Detalhes no artefato security-results/npm-audit.json. GATE INFORMATIVO!"
+      - run:
+          name: Install gitleaks
+          command: |
+            GITLEAKS_VERSION=8.21.2
+            curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+            gitleaks version
+      - run:
+          name: Secret scan (gitleaks)
+          command: |
+            mkdir -p security-results
+            gitleaks detect \
+              --source . \
+              --config .gitleaks.toml \
+              --redact \
+              --report-format sarif \
+              --report-path security-results/gitleaks.sarif \
+              --verbose
+      - store_artifacts:
+          path: security-results
+          destination: security-results
+
+  build_app:
+    executor: node
+    steps:
+      - install_dependencies
+      - run:
+          name: Check production environment variables
+          command: |
+            test -n "$DATABASE_URL" || (echo "DATABASE_URL must be configured in CircleCI project environment variables" && exit 1)
+            test -n "$BETTER_AUTH_SECRET" || (echo "BETTER_AUTH_SECRET must be configured in CircleCI project environment variables" && exit 1)
+      - run:
+          name: Build application
+          command: NODE_ENV=production npm run build
+
+workflows:
+  build_and_test:
+    jobs:
+      - unit_tests
+      - security_scan
+      - build_app:
+          requires:
+            - unit_tests
+            - security_scan
